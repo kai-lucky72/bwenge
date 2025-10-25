@@ -141,7 +141,7 @@ def validate_json_structure(data: Any, required_fields: List[str] = None) -> Dic
 def validate_uuid(uuid_string: str) -> str:
     """Validate UUID format"""
     uuid_pattern = re.compile(
-        r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'$',
         re.IGNORECASE
     )
     
@@ -158,7 +158,7 @@ def validate_url(url: str) -> str:
         r'localhost|'  # localhost...
         r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
         r'(?::\d+)?'  # optional port
-        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+        r'(?:/?|[/?]\S+)$'$', re.IGNORECASE)
     
     if not url_pattern.match(url):
         raise ValueError("Invalid URL format")

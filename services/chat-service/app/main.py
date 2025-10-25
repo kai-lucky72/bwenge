@@ -246,14 +246,24 @@ async def get_ai_response(
         }
 
 async def verify_token(token: str) -> Dict:
-    """Verify JWT token (simplified)"""
-    # In production, this should properly verify the JWT
-    # For now, return mock user info
-    return {
-        "user_id": "mock-user-id",
-        "org_id": "mock-org-id",
-        "token": token
-    }
+    """Verify JWT token"""
+    try:
+        from libs.common.auth import verify_token as verify_jwt_token
+        payload = verify_jwt_token(token)
+        
+        if payload.get("type") != "access":
+            return None
+        
+        return {
+            "user_id": payload.get("sub"),
+            "org_id": payload.get("org_id"),
+            "email": payload.get("email"),
+            "role": payload.get("role"),
+            "token": token
+        }
+    except Exception as e:
+        print(f"Token verification failed: {e}")
+        return None
 
 @app.get("/sessions/{session_id}/messages")
 async def get_session_messages(
