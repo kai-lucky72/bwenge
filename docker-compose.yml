@@ -1,0 +1,178 @@
+version: '3.8'
+
+services:
+  # Database Services
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: bwenge
+      POSTGRES_USER: bwenge
+      POSTGRES_PASSWORD: bwenge_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Vector Database
+  weaviate:
+    image: semitechnologies/weaviate:1.21.2
+    ports:
+      - "8080:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'none'
+      ENABLE_MODULES: 'text2vec-openai,generative-openai'
+      CLUSTER_HOSTNAME: 'node1'
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+
+  # API Gateway
+  api-gateway:
+    build: 
+      context: .
+      dockerfile: ./services/api-gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=your-jwt-secret-key
+    depends_on:
+      - postgres
+      - redis
+
+  # Auth Service
+  auth-service:
+    build: 
+      context: .
+      dockerfile: ./services/auth-service/Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+      - JWT_SECRET=your-jwt-secret-key
+    depends_on:
+      - postgres
+
+  # Ingest Service
+  ingest-service:
+    build: 
+      context: .
+      dockerfile: ./services/ingest-service/Dockerfile
+    ports:
+      - "8002:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+      - REDIS_URL=redis://redis:6379
+      - WEAVIATE_URL=http://weaviate:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - postgres
+      - redis
+      - weaviate
+    volumes:
+      - ./uploads:/app/uploads
+
+  # Celery Worker
+  celery-worker:
+    build: 
+      context: .
+      dockerfile: ./services/ingest-service/Dockerfile
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+      - REDIS_URL=redis://redis:6379
+      - WEAVIATE_URL=http://weaviate:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - postgres
+      - redis
+      - weaviate
+    volumes:
+      - ./uploads:/app/uploads
+
+  # Persona Service
+  persona-service:
+    build: 
+      context: .
+      dockerfile: ./services/persona-service/Dockerfile
+    ports:
+      - "8003:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+      - WEAVIATE_URL=http://weaviate:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - postgres
+      - weaviate
+
+  # Chat Service
+  chat-service:
+    build: 
+      context: .
+      dockerfile: ./services/chat-service/Dockerfile
+    ports:
+      - "8004:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+      - REDIS_URL=redis://redis:6379
+      - PERSONA_SERVICE_URL=http://persona-service:8000
+    depends_on:
+      - postgres
+      - redis
+      - persona-service
+
+  # 3D Service
+  3d-service:
+    build: 
+      context: .
+      dockerfile: ./services/3d-service/Dockerfile
+    ports:
+      - "8005:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+    depends_on:
+      - postgres
+    volumes:
+      - ./assets/3d:/app/assets
+
+  # Analytics Service
+  analytics-service:
+    build: 
+      context: .
+      dockerfile: ./services/analytics-service/Dockerfile
+    ports:
+      - "8006:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+    depends_on:
+      - postgres
+
+  # Payments Service
+  payments-service:
+    build: 
+      context: .
+      dockerfile: ./services/payments-service/Dockerfile
+    ports:
+      - "8007:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+  redis_data:
+  weaviate_data:

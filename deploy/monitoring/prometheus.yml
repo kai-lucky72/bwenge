@@ -1,0 +1,81 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # System metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Database metrics
+  - job_name: 'postgres-exporter'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  - job_name: 'redis-exporter'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # Bwenge OS Services
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['auth-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'ingest-service'
+    static_configs:
+      - targets: ['ingest-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'persona-service'
+    static_configs:
+      - targets: ['persona-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'chat-service'
+    static_configs:
+      - targets: ['chat-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: '3d-service'
+    static_configs:
+      - targets: ['3d-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'analytics-service'
+    static_configs:
+      - targets: ['analytics-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'payments-service'
+    static_configs:
+      - targets: ['payments-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s

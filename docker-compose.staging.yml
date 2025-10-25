@@ -1,0 +1,224 @@
+version: '3.8'
+
+services:
+  # Database Services
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: bwenge_staging
+      POSTGRES_USER: bwenge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_staging_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # Vector Database
+  weaviate:
+    image: semitechnologies/weaviate:1.21.2
+    ports:
+      - "8080:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'false'
+      AUTHENTICATION_APIKEY_ENABLED: 'true'
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY}
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'none'
+      ENABLE_MODULES: 'text2vec-openai,generative-openai'
+      CLUSTER_HOSTNAME: 'node1'
+    volumes:
+      - weaviate_staging_data:/var/lib/weaviate
+    restart: unless-stopped
+
+  # API Gateway
+  api-gateway:
+    build: 
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - ENVIRONMENT=staging
+      - LOG_LEVEL=INFO
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Auth Service
+  auth-service:
+    build: 
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - JWT_SECRET=${JWT_SECRET}
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # Ingest Service
+  ingest-service:
+    build: 
+      context: ./services/ingest-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - REDIS_URL=redis://redis:6379
+      - WEAVIATE_URL=http://weaviate:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+      - redis
+      - weaviate
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+  # Celery Worker
+  celery-worker:
+    build: 
+      context: ./services/ingest-service
+      dockerfile: Dockerfile
+    command: celery -A app.celery worker --loglevel=info --concurrency=2
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - REDIS_URL=redis://redis:6379
+      - WEAVIATE_URL=http://weaviate:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+      - redis
+      - weaviate
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+  # Celery Beat (Scheduler)
+  celery-beat:
+    build: 
+      context: ./services/ingest-service
+      dockerfile: Dockerfile
+    command: celery -A app.celery beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - REDIS_URL=redis://redis:6379
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # Persona Service
+  persona-service:
+    build: 
+      context: ./services/persona-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - WEAVIATE_URL=http://weaviate:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+      - weaviate
+    restart: unless-stopped
+
+  # Chat Service
+  chat-service:
+    build: 
+      context: ./services/chat-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - REDIS_URL=redis://redis:6379
+      - PERSONA_SERVICE_URL=http://persona-service:8000
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+      - redis
+      - persona-service
+    restart: unless-stopped
+
+  # 3D Service
+  3d-service:
+    build: 
+      context: ./services/3d-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - URL_SECRET=${URL_SECRET}
+      - BASE_URL=${BASE_URL}
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+    volumes:
+      - ./assets/3d:/app/assets
+    restart: unless-stopped
+
+  # Analytics Service
+  analytics-service:
+    build: 
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # Payments Service
+  payments-service:
+    build: 
+      context: ./services/payments-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://bwenge:${POSTGRES_PASSWORD}@postgres:5432/bwenge_staging
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - ENVIRONMENT=staging
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/staging.conf:/etc/nginx/nginx.conf
+      - ./deploy/ssl:/etc/ssl/certs
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+
+volumes:
+  postgres_staging_data:
+  redis_staging_data:
+  weaviate_staging_data:

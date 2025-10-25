@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bwenge-config
+  namespace: bwenge-os
+data:
+  DATABASE_URL: "postgresql://bwenge:bwenge@postgres:5432/bwenge"
+  REDIS_URL: "redis://redis:6379"
+  WEAVIATE_URL: "http://weaviate:8080"
+  AUTH_SERVICE_URL: "http://auth-service:8000"
+  INGEST_SERVICE_URL: "http://ingest-service:8000"
+  PERSONA_SERVICE_URL: "http://persona-service:8000"
+  CHAT_SERVICE_URL: "http://chat-service:8000"
+  3D_SERVICE_URL: "http://3d-service:8000"
+  ANALYTICS_SERVICE_URL: "http://analytics-service:8000"
+  PAYMENTS_SERVICE_URL: "http://payments-service:8000"
