@@ -1,34 +1,49 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Text
 import sys
 import os
-import stripe
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+import uuid
+from typing import Optional
 
 # Add libs to path
 sys.path.append('/app')
-from libs.common.database import get_db, init_db
+from libs.common.database import get_db, init_db, Base
 from libs.common.models import Subscription, Organization, UsageQuota
-from libs.common.schemas import SubscriptionCreate, SubscriptionResponse, WebhookEvent
+from libs.common.schemas import SubscriptionCreate, SubscriptionResponse
 from libs.common.auth import get_current_user
 
 app = FastAPI(
-    title="Bwenge OS Payments Service",
-    description="Payment and subscription management service",
+    title="Bwenge OS Payments Service (Rwanda Edition)",
+    description="Local payment simulation and subscription management service for Rwanda",
     version="1.0.0"
 )
 
-# Configure Stripe
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+# Local Payment Transaction Model for Rwanda
+class PaymentTransaction(Base):
+    __tablename__ = "payment_transactions"
+    
+    transaction_id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String(36), nullable=False)
+    amount = Column(Float, nullable=False)
+    currency = Column(String(3), default="RWF")  # Rwandan Franc
+    payment_method = Column(String(50), nullable=False)  # momo, airtel, bank, cash
+    phone_number = Column(String(20), nullable=True)  # For mobile money
+    reference_number = Column(String(100), nullable=True)
+    status = Column(String(20), default="pending")  # pending, completed, failed, cancelled
+    plan_name = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
 
-# Subscription plans
+# Subscription plans (Rwanda pricing in RWF)
 SUBSCRIPTION_PLANS = {
     "free": {
-        "name": "Free Plan",
+        "name": "Ubwoba (Free)",
         "price": 0,
-        "stripe_price_id": None,
+        "price_usd": 0,
         "quotas": {
             "messages": 100,
             "storage": 100 * 1024 * 1024,  # 100MB
@@ -36,9 +51,9 @@ SUBSCRIPTION_PLANS = {
         }
     },
     "basic": {
-        "name": "Basic Plan",
-        "price": 29,
-        "stripe_price_id": os.getenv("STRIPE_BASIC_PRICE_ID"),
+        "name": "Ibanze (Basic)",
+        "price": 30000,  # 30,000 RWF (~$30)
+        "price_usd": 30,
         "quotas": {
             "messages": 1000,
             "storage": 1024 * 1024 * 1024,  # 1GB
@@ -46,9 +61,9 @@ SUBSCRIPTION_PLANS = {
         }
     },
     "pro": {
-        "name": "Pro Plan",
-        "price": 99,
-        "stripe_price_id": os.getenv("STRIPE_PRO_PRICE_ID"),
+        "name": "Nyampinga (Pro)",
+        "price": 100000,  # 100,000 RWF (~$100)
+        "price_usd": 100,
         "quotas": {
             "messages": 10000,
             "storage": 10 * 1024 * 1024 * 1024,  # 10GB
@@ -56,15 +71,24 @@ SUBSCRIPTION_PLANS = {
         }
     },
     "enterprise": {
-        "name": "Enterprise Plan",
-        "price": 299,
-        "stripe_price_id": os.getenv("STRIPE_ENTERPRISE_PRICE_ID"),
+        "name": "Ikigo (Enterprise)",
+        "price": 300000,  # 300,000 RWF (~$300)
+        "price_usd": 300,
         "quotas": {
             "messages": -1,  # Unlimited
             "storage": -1,   # Unlimited
             "users": -1      # Unlimited
         }
     }
+}
+
+# Rwanda payment methods
+PAYMENT_METHODS = {
+    "momo": "MTN Mobile Money",
+    "airtel": "Airtel Money", 
+    "bank": "Bank Transfer",
+    "cash": "Cash Payment",
+    "tigo": "Tigo Cash"
 }
 
 # Initialize database on startup
@@ -77,26 +101,35 @@ async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "payments-service"}
 
-@app.post("/payments/subscribe", response_model=SubscriptionResponse)
+@app.post("/payments/subscribe")
 async def create_subscription(
-    subscription_data: SubscriptionCreate,
+    subscription_data: dict,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Create subscription checkout session"""
+    """Create subscription with local payment simulation"""
+    
+    plan_name = subscription_data.get("plan_name")
+    payment_method = subscription_data.get("payment_method", "momo")
+    phone_number = subscription_data.get("phone_number")
     
     # Validate plan
-    if subscription_data.plan_name not in SUBSCRIPTION_PLANS:
+    if plan_name not in SUBSCRIPTION_PLANS:
         raise HTTPException(status_code=400, detail="Invalid subscription plan")
     
-    plan = SUBSCRIPTION_PLANS[subscription_data.plan_name]
+    plan = SUBSCRIPTION_PLANS[plan_name]
     
-    # Free plan doesn't require Stripe
-    if subscription_data.plan_name == "free":
+    # Free plan doesn't require payment
+    if plan_name == "free":
         return await create_free_subscription(current_user["org_id"], db)
     
-    if not plan["stripe_price_id"]:
-        raise HTTPException(status_code=400, detail="Plan not configured")
+    # Validate payment method
+    if payment_method not in PAYMENT_METHODS:
+        raise HTTPException(status_code=400, detail="Invalid payment method")
+    
+    # For mobile money, phone number is required
+    if payment_method in ["momo", "airtel", "tigo"] and not phone_number:
+        raise HTTPException(status_code=400, detail="Phone number required for mobile money")
     
     try:
         # Get organization
@@ -107,43 +140,104 @@ async def create_subscription(
         if not org:
             raise HTTPException(status_code=404, detail="Organization not found")
         
-        # Create Stripe checkout session
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=[{
-                'price': plan["stripe_price_id"],
-                'quantity': 1,
-            }],
-            mode='subscription',
-            success_url=subscription_data.success_url,
-            cancel_url=subscription_data.cancel_url,
-            client_reference_id=str(current_user["org_id"]),
-            metadata={
-                'org_id': str(current_user["org_id"]),
-                'plan_name': subscription_data.plan_name
-            }
+        # Create payment transaction
+        transaction = PaymentTransaction(
+            org_id=current_user["org_id"],
+            amount=plan["price"],
+            payment_method=payment_method,
+            phone_number=phone_number,
+            plan_name=plan_name,
+            reference_number=f"BWG-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}",
+            status="pending"
         )
+        
+        db.add(transaction)
+        db.commit()
+        db.refresh(transaction)
         
         # Create pending subscription record
         subscription = Subscription(
             org_id=current_user["org_id"],
             status="pending",
-            plan_name=subscription_data.plan_name
+            plan_name=plan_name
         )
         
         db.add(subscription)
         db.commit()
         db.refresh(subscription)
         
-        return SubscriptionResponse(
-            checkout_url=checkout_session.url,
-            subscription_id=subscription.subscription_id
-        )
+        return {
+            "transaction_id": transaction.transaction_id,
+            "subscription_id": subscription.subscription_id,
+            "amount": transaction.amount,
+            "currency": "RWF",
+            "payment_method": PAYMENT_METHODS[payment_method],
+            "reference_number": transaction.reference_number,
+            "status": "pending",
+            "instructions": get_payment_instructions(payment_method, transaction.amount, transaction.reference_number, phone_number),
+            "message": f"Payment initiated for {plan['name']} plan. Please complete payment using the instructions provided."
+        }
         
-    except stripe.error.StripeError as e:
-        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Subscription creation failed: {str(e)}")
+
+def get_payment_instructions(payment_method: str, amount: float, reference: str, phone_number: str = None) -> dict:
+    """Get payment instructions for different methods"""
+    
+    instructions = {
+        "momo": {
+            "steps": [
+                "Dial *182# on your MTN phone",
+                "Select option 1 (Send Money)",
+                "Enter merchant code: 123456",
+                f"Enter amount: {amount:,.0f} RWF",
+                f"Enter reference: {reference}",
+                "Confirm payment with your PIN"
+            ],
+            "alternative": f"Or send {amount:,.0f} RWF to 123456 with reference {reference}"
+        },
+        "airtel": {
+            "steps": [
+                "Dial *175# on your Airtel phone", 
+                "Select Pay Bill",
+                "Enter merchant code: 654321",
+                f"Enter amount: {amount:,.0f} RWF",
+                f"Enter reference: {reference}",
+                "Confirm with your PIN"
+            ]
+        },
+        "bank": {
+            "steps": [
+                "Visit any bank branch or use online banking",
+                "Transfer to Account: 1234567890",
+                "Account Name: Bwenge OS Ltd",
+                "Bank: Bank of Kigali",
+                f"Amount: {amount:,.0f} RWF",
+                f"Reference: {reference}"
+            ]
+        },
+        "cash": {
+            "steps": [
+                "Visit our office in Kigali",
+                "Address: KG 123 St, Gasabo District",
+                f"Pay {amount:,.0f} RWF cash",
+                f"Mention reference: {reference}",
+                "Get receipt for confirmation"
+            ]
+        },
+        "tigo": {
+            "steps": [
+                "Dial *505# on your Tigo phone",
+                "Select Pay Bill", 
+                "Enter merchant code: 789012",
+                f"Enter amount: {amount:,.0f} RWF",
+                f"Enter reference: {reference}",
+                "Confirm payment"
+            ]
+        }
+    }
+    
+    return instructions.get(payment_method, {})
 
 async def create_free_subscription(org_id: str, db: Session) -> SubscriptionResponse:
     """Create free subscription"""
@@ -186,136 +280,155 @@ async def create_free_subscription(org_id: str, db: Session) -> SubscriptionResp
         subscription_id=subscription.subscription_id
     )
 
-@app.post("/webhooks/payment")
-async def handle_stripe_webhook(request: Request, db: Session = Depends(get_db)):
-    """Handle Stripe webhooks"""
+@app.post("/payments/simulate-completion/{transaction_id}")
+async def simulate_payment_completion(
+    transaction_id: str,
+    completion_data: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Simulate payment completion (for development/testing)"""
     
-    payload = await request.body()
-    sig_header = request.headers.get('stripe-signature')
-    
-    try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, STRIPE_WEBHOOK_SECRET
-        )
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError:
-        raise HTTPException(status_code=400, detail="Invalid signature")
-    
-    # Handle the event
-    if event['type'] == 'checkout.session.completed':
-        await handle_checkout_completed(event['data']['object'], db)
-    elif event['type'] == 'invoice.payment_succeeded':
-        await handle_payment_succeeded(event['data']['object'], db)
-    elif event['type'] == 'customer.subscription.updated':
-        await handle_subscription_updated(event['data']['object'], db)
-    elif event['type'] == 'customer.subscription.deleted':
-        await handle_subscription_cancelled(event['data']['object'], db)
-    
-    return {"status": "success"}
-
-async def handle_checkout_completed(session, db: Session):
-    """Handle successful checkout"""
-    
-    org_id = session.get('client_reference_id')
-    if not org_id:
-        return
-    
-    # Get the subscription from Stripe
-    stripe_subscription = stripe.Subscription.retrieve(session['subscription'])
-    
-    # Update our subscription record
-    subscription = db.query(Subscription).filter(
-        Subscription.org_id == org_id,
-        Subscription.status == "pending"
+    # Get transaction
+    transaction = db.query(PaymentTransaction).filter(
+        PaymentTransaction.transaction_id == transaction_id,
+        PaymentTransaction.org_id == current_user["org_id"]
     ).first()
     
-    if subscription:
-        subscription.stripe_subscription_id = stripe_subscription.id
-        subscription.status = "active"
-        subscription.current_period_start = datetime.fromtimestamp(
-            stripe_subscription.current_period_start
-        )
-        subscription.current_period_end = datetime.fromtimestamp(
-            stripe_subscription.current_period_end
-        )
-        
-        # Update organization plan
-        org = db.query(Organization).filter(Organization.org_id == org_id).first()
-        if org:
-            org.plan = subscription.plan_name
-        
-        # Create/update usage quotas
-        await update_usage_quotas(org_id, subscription.plan_name, db)
-        
-        db.commit()
-
-async def handle_payment_succeeded(invoice, db: Session):
-    """Handle successful payment"""
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
     
-    subscription_id = invoice.get('subscription')
-    if not subscription_id:
-        return
+    if transaction.status != "pending":
+        raise HTTPException(status_code=400, detail="Transaction already processed")
     
-    # Update subscription period
-    subscription = db.query(Subscription).filter(
-        Subscription.stripe_subscription_id == subscription_id
-    ).first()
+    # Simulate payment completion
+    success = completion_data.get("success", True)
     
-    if subscription:
-        stripe_subscription = stripe.Subscription.retrieve(subscription_id)
-        subscription.current_period_start = datetime.fromtimestamp(
-            stripe_subscription.current_period_start
-        )
-        subscription.current_period_end = datetime.fromtimestamp(
-            stripe_subscription.current_period_end
-        )
-        subscription.status = "active"
+    if success:
+        transaction.status = "completed"
+        transaction.completed_at = datetime.utcnow()
         
-        # Reset usage quotas for new period
-        await reset_usage_quotas(str(subscription.org_id), db)
-        
-        db.commit()
-
-async def handle_subscription_updated(stripe_subscription, db: Session):
-    """Handle subscription updates"""
-    
-    subscription = db.query(Subscription).filter(
-        Subscription.stripe_subscription_id == stripe_subscription['id']
-    ).first()
-    
-    if subscription:
-        subscription.status = stripe_subscription['status']
-        subscription.current_period_start = datetime.fromtimestamp(
-            stripe_subscription['current_period_start']
-        )
-        subscription.current_period_end = datetime.fromtimestamp(
-            stripe_subscription['current_period_end']
-        )
-        
-        db.commit()
-
-async def handle_subscription_cancelled(stripe_subscription, db: Session):
-    """Handle subscription cancellation"""
-    
-    subscription = db.query(Subscription).filter(
-        Subscription.stripe_subscription_id == stripe_subscription['id']
-    ).first()
-    
-    if subscription:
-        subscription.status = "cancelled"
-        
-        # Downgrade to free plan
-        org = db.query(Organization).filter(
-            Organization.org_id == subscription.org_id
+        # Activate subscription
+        subscription = db.query(Subscription).filter(
+            Subscription.org_id == current_user["org_id"],
+            Subscription.status == "pending"
         ).first()
-        if org:
-            org.plan = "free"
         
-        # Update quotas to free plan limits
-        await update_usage_quotas(str(subscription.org_id), "free", db)
+        if subscription:
+            subscription.status = "active"
+            subscription.current_period_start = datetime.utcnow()
+            subscription.current_period_end = datetime.utcnow() + timedelta(days=30)
+            
+            # Update organization plan
+            org = db.query(Organization).filter(
+                Organization.org_id == current_user["org_id"]
+            ).first()
+            if org:
+                org.plan = subscription.plan_name
+            
+            # Create/update usage quotas
+            await update_usage_quotas(current_user["org_id"], subscription.plan_name, db)
         
         db.commit()
+        
+        return {
+            "status": "success",
+            "message": "Payment completed successfully",
+            "transaction_id": transaction_id,
+            "subscription_activated": True
+        }
+    else:
+        transaction.status = "failed"
+        transaction.notes = completion_data.get("reason", "Payment failed")
+        db.commit()
+        
+        return {
+            "status": "failed", 
+            "message": "Payment failed",
+            "transaction_id": transaction_id,
+            "reason": transaction.notes
+        }
+
+@app.get("/payments/transactions")
+async def list_transactions(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List payment transactions for organization"""
+    
+    transactions = db.query(PaymentTransaction).filter(
+        PaymentTransaction.org_id == current_user["org_id"]
+    ).order_by(PaymentTransaction.created_at.desc()).all()
+    
+    return {
+        "transactions": [
+            {
+                "transaction_id": t.transaction_id,
+                "amount": t.amount,
+                "currency": t.currency,
+                "payment_method": PAYMENT_METHODS.get(t.payment_method, t.payment_method),
+                "reference_number": t.reference_number,
+                "status": t.status,
+                "plan_name": t.plan_name,
+                "created_at": t.created_at,
+                "completed_at": t.completed_at,
+                "notes": t.notes
+            }
+            for t in transactions
+        ]
+    }
+
+@app.get("/payments/methods")
+async def list_payment_methods():
+    """List available payment methods in Rwanda"""
+    
+    return {
+        "methods": [
+            {
+                "id": method_id,
+                "name": method_name,
+                "type": "mobile_money" if method_id in ["momo", "airtel", "tigo"] else "traditional",
+                "available": True
+            }
+            for method_id, method_name in PAYMENT_METHODS.items()
+        ]
+    }
+
+@app.post("/payments/cancel-subscription")
+async def cancel_subscription(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Cancel current subscription"""
+    
+    subscription = db.query(Subscription).filter(
+        Subscription.org_id == current_user["org_id"],
+        Subscription.status == "active"
+    ).first()
+    
+    if not subscription:
+        raise HTTPException(status_code=404, detail="No active subscription found")
+    
+    # Cancel subscription
+    subscription.status = "cancelled"
+    
+    # Downgrade to free plan
+    org = db.query(Organization).filter(
+        Organization.org_id == current_user["org_id"]
+    ).first()
+    if org:
+        org.plan = "free"
+    
+    # Update quotas to free plan limits
+    await update_usage_quotas(current_user["org_id"], "free", db)
+    
+    db.commit()
+    
+    return {
+        "status": "success",
+        "message": "Subscription cancelled successfully. Downgraded to free plan.",
+        "new_plan": "free"
+    }
 
 async def update_usage_quotas(org_id: str, plan_name: str, db: Session):
     """Update usage quotas for organization"""

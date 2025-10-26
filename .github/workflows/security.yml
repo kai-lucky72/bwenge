@@ -1,0 +1,337 @@
+name: Security Scanning
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # Dependency vulnerability scanning
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install safety pip-audit
+    
+    - name: Run Safety check
+      run: |
+        safety check --json --output safety-report.json
+        safety check --short-report
+    
+    - name: Run pip-audit
+      run: |
+        pip-audit --format=json --output=pip-audit-report.json
+        pip-audit --format=cyclonedx --output=sbom.json
+    
+    - name: Upload vulnerability reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: dependency-scan-results
+        path: |
+          safety-report.json
+          pip-audit-report.json
+          sbom.json
+
+  # Static Application Security Testing (SAST)
+  sast-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install SAST tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit semgrep
+    
+    - name: Run Bandit
+      run: |
+        bandit -r services/ libs/ -f json -o bandit-report.json
+        bandit -r services/ libs/ -f txt
+    
+    - name: Run Semgrep
+      run: |
+        semgrep --config=auto --json --output=semgrep-report.json services/ libs/
+        semgrep --config=auto services/ libs/
+    
+    - name: Upload SAST results
+      uses: actions/upload-artifact@v3
+      with:
+        name: sast-scan-results
+        path: |
+          bandit-report.json
+          semgrep-report.json
+
+  # Container security scanning
+  container-scan:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [api-gateway, auth-service, persona-service, chat-service]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build Docker image
+      run: |
+        docker build -t bwenge/${{ matrix.service }}:scan -f services/${{ matrix.service }}/Dockerfile .
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'bwenge/${{ matrix.service }}:scan'
+        format: 'sarif'
+        output: 'trivy-${{ matrix.service }}.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-${{ matrix.service }}.sarif'
+        category: 'trivy-${{ matrix.service }}'
+    
+    - name: Run Grype vulnerability scanner
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+        grype bwenge/${{ matrix.service }}:scan -o json > grype-${{ matrix.service }}.json
+    
+    - name: Upload Grype results
+      uses: actions/upload-artifact@v3
+      with:
+        name: container-scan-results
+        path: grype-${{ matrix.service }}.json
+
+  # Infrastructure as Code security
+  iac-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: .
+        framework: dockerfile,kubernetes
+        output_format: sarif
+        output_file_path: checkov-report.sarif
+    
+    - name: Upload Checkov results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: checkov-report.sarif
+    
+    - name: Run Terrascan
+      run: |
+        curl -L "$(curl -s https://api.github.com/repos/tenable/terrascan/releases/latest | grep -o -E "https://.+?_Linux_x86_64.tar.gz")" > terrascan.tar.gz
+        tar -xf terrascan.tar.gz terrascan && rm terrascan.tar.gz
+        sudo mv terrascan /usr/local/bin
+        
+        terrascan scan -d . -o json > terrascan-report.json
+    
+    - name: Upload Terrascan results
+      uses: actions/upload-artifact@v3
+      with:
+        name: iac-scan-results
+        path: terrascan-report.json
+
+  # Secrets scanning
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for secret scanning
+    
+    - name: Run TruffleHog
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+    
+    - name: Run GitLeaks
+      run: |
+        docker run --rm -v "$PWD:/path" zricethezav/gitleaks:latest detect --source="/path" --report-format=json --report-path=/path/gitleaks-report.json
+    
+    - name: Upload secrets scan results
+      uses: actions/upload-artifact@v3
+      with:
+        name: secrets-scan-results
+        path: gitleaks-report.json
+
+  # Dynamic Application Security Testing (DAST)
+  dast-scan:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Start application
+      run: |
+        cp .env.example .env.security
+        echo "OPENAI_API_KEY=test-key" >> .env.security
+        echo "JWT_SECRET=test-jwt-secret-for-security-scan" >> .env.security
+        
+        docker-compose --env-file .env.security up -d
+        sleep 60  # Wait for services to start
+    
+    - name: Run OWASP ZAP scan
+      run: |
+        docker run -v $(pwd):/zap/wrk/:rw -t owasp/zap2docker-stable zap-full-scan.py \
+          -t http://localhost:8000 \
+          -J zap-report.json \
+          -r zap-report.html \
+          -x zap-report.xml || true
+    
+    - name: Run Nuclei scan
+      run: |
+        docker run --rm -v $(pwd):/nuclei projectdiscovery/nuclei:latest \
+          -u http://localhost:8000 \
+          -json-export nuclei-report.json
+    
+    - name: Upload DAST results
+      uses: actions/upload-artifact@v3
+      with:
+        name: dast-scan-results
+        path: |
+          zap-report.json
+          zap-report.html
+          zap-report.xml
+          nuclei-report.json
+    
+    - name: Cleanup
+      if: always()
+      run: docker-compose down -v
+
+  # License compliance
+  license-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pip-licenses licensecheck
+        pip install -r requirements.txt
+    
+    - name: Generate license report
+      run: |
+        pip-licenses --format=json --output-file=licenses.json
+        pip-licenses --format=html --output-file=licenses.html
+        licensecheck --zero
+    
+    - name: Upload license report
+      uses: actions/upload-artifact@v3
+      with:
+        name: license-report
+        path: |
+          licenses.json
+          licenses.html
+
+  # Security summary report
+  security-summary:
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, sast-scan, container-scan, iac-scan, secrets-scan]
+    if: always()
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Generate security summary
+      run: |
+        python scripts/generate-security-summary.py \
+          --dependency-scan dependency-scan-results/ \
+          --sast-scan sast-scan-results/ \
+          --container-scan container-scan-results/ \
+          --iac-scan iac-scan-results/ \
+          --secrets-scan secrets-scan-results/ \
+          --output security-summary.json
+    
+    - name: Upload security summary
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-summary
+        path: security-summary.json
+    
+    - name: Comment on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const summary = JSON.parse(fs.readFileSync('security-summary.json', 'utf8'));
+          
+          const comment = `## 🔒 Security Scan Results
+          
+          | Scan Type | Status | Issues Found |
+          |-----------|--------|--------------|
+          | Dependencies | ${summary.dependency.status} | ${summary.dependency.issues} |
+          | SAST | ${summary.sast.status} | ${summary.sast.issues} |
+          | Container | ${summary.container.status} | ${summary.container.issues} |
+          | IaC | ${summary.iac.status} | ${summary.iac.issues} |
+          | Secrets | ${summary.secrets.status} | ${summary.secrets.issues} |
+          
+          **Overall Security Score:** ${summary.overall_score}/100
+          
+          ${summary.recommendations ? '### Recommendations\n' + summary.recommendations.map(r => `- ${r}`).join('\n') : ''}
+          `;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+  # Security policy compliance
+  compliance-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check security policy compliance
+      run: |
+        # Check for required security files
+        files=("SECURITY.md" ".github/SECURITY.md" "CODEOWNERS")
+        for file in "${files[@]}"; do
+          if [[ ! -f "$file" ]]; then
+            echo "Missing required security file: $file"
+            exit 1
+          fi
+        done
+        
+        # Check for security headers in Docker files
+        find . -name "Dockerfile" -exec grep -L "USER" {} \; | while read file; do
+          echo "Warning: $file does not specify a non-root user"
+        done
+        
+        # Check for hardcoded secrets patterns
+        if grep -r "password\|secret\|key" --include="*.py" --include="*.yml" --include="*.yaml" . | grep -v ".git" | grep -v "example"; then
+          echo "Warning: Potential hardcoded secrets found"
+        fi

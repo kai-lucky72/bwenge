@@ -1,0 +1,69 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'otel-collector'
+          scrape_interval: 10s
+          static_configs:
+            - targets: ['0.0.0.0:8888']
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  memory_limiter:
+    limit_mib: 512
+
+  resource:
+    attributes:
+      - key: environment
+        value: ${ENVIRONMENT}
+        action: upsert
+      - key: service.namespace
+        value: bwenge-os
+        action: upsert
+
+  attributes:
+    actions:
+      - key: http.user_agent
+        action: delete
+      - key: http.request.header.authorization
+        action: delete
+
+exporters:
+  jaeger:
+    endpoint: jaeger-all-in-one:14250
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: bwenge
+    const_labels:
+      environment: ${ENVIRONMENT}
+
+  logging:
+    loglevel: info
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, attributes, batch]
+      exporters: [jaeger, logging]
+
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheus, logging]
+
+  extensions: []

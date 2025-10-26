@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: 'Bwenge OS Dashboards'
+    orgId: 1
+    folder: 'Bwenge OS'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

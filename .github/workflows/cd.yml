@@ -1,0 +1,307 @@
+name: CD Pipeline
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches: [main, develop]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Deploy to Staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop'
+    environment: staging
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Configure kubectl
+      run: |
+        aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME_STAGING }}
+    
+    - name: Deploy to staging
+      run: |
+        # Update image tags in Kubernetes manifests
+        sed -i "s|IMAGE_TAG|${{ github.sha }}|g" deploy/kubernetes/staging/*.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f deploy/kubernetes/staging/
+        
+        # Wait for rollout to complete
+        kubectl rollout status deployment/api-gateway -n bwenge-staging
+        kubectl rollout status deployment/auth-service -n bwenge-staging
+        kubectl rollout status deployment/persona-service -n bwenge-staging
+    
+    - name: Run staging smoke tests
+      run: |
+        # Wait for services to be ready
+        sleep 60
+        
+        # Get staging URL
+        STAGING_URL=$(kubectl get service api-gateway -n bwenge-staging -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        
+        # Run smoke tests
+        curl -f "http://${STAGING_URL}/health" || exit 1
+        
+        # Run basic API tests
+        python scripts/smoke-tests.py --url "http://${STAGING_URL}"
+    
+    - name: Notify staging deployment
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        text: 'Staging deployment completed for commit ${{ github.sha }}'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Deploy to Production
+  deploy-production:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    environment: production
+    needs: []
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Configure kubectl
+      run: |
+        aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME_PROD }}
+    
+    - name: Blue-Green Deployment
+      run: |
+        # Create new deployment with green suffix
+        sed -i "s|IMAGE_TAG|${{ github.sha }}|g" deploy/kubernetes/production/*.yaml
+        sed -i "s|app: |app: green-|g" deploy/kubernetes/production/*.yaml
+        
+        # Deploy green version
+        kubectl apply -f deploy/kubernetes/production/
+        
+        # Wait for green deployment to be ready
+        kubectl rollout status deployment/green-api-gateway -n bwenge-production
+        kubectl rollout status deployment/green-auth-service -n bwenge-production
+        
+        # Run health checks on green deployment
+        GREEN_URL=$(kubectl get service green-api-gateway -n bwenge-production -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        
+        # Validate green deployment
+        for i in {1..10}; do
+          if curl -f "http://${GREEN_URL}/health"; then
+            echo "Green deployment is healthy"
+            break
+          fi
+          sleep 30
+        done
+        
+        # Switch traffic to green (update service selectors)
+        kubectl patch service api-gateway -n bwenge-production -p '{"spec":{"selector":{"app":"green-api-gateway"}}}'
+        kubectl patch service auth-service -n bwenge-production -p '{"spec":{"selector":{"app":"green-auth-service"}}}'
+        
+        # Wait and verify production traffic
+        sleep 60
+        
+        # Clean up old blue deployment
+        kubectl delete deployment api-gateway -n bwenge-production --ignore-not-found=true
+        kubectl delete deployment auth-service -n bwenge-production --ignore-not-found=true
+        
+        # Rename green to blue for next deployment
+        kubectl patch deployment green-api-gateway -n bwenge-production -p '{"metadata":{"name":"api-gateway"}}'
+        kubectl patch deployment green-auth-service -n bwenge-production -p '{"metadata":{"name":"auth-service"}}'
+    
+    - name: Run production smoke tests
+      run: |
+        PROD_URL=$(kubectl get service api-gateway -n bwenge-production -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        
+        # Comprehensive smoke tests
+        python scripts/smoke-tests.py --url "http://${PROD_URL}" --comprehensive
+        
+        # Performance validation
+        k6 run --duration 2m --vus 10 tests/performance/production-smoke.js
+    
+    - name: Update monitoring and alerting
+      run: |
+        # Update Grafana dashboards with new version
+        curl -X POST "${{ secrets.GRAFANA_URL }}/api/dashboards/db" \
+          -H "Authorization: Bearer ${{ secrets.GRAFANA_API_KEY }}" \
+          -H "Content-Type: application/json" \
+          -d @deploy/monitoring/grafana-dashboard.json
+        
+        # Update Prometheus alerts
+        kubectl apply -f deploy/monitoring/prometheus-rules.yaml
+    
+    - name: Notify production deployment
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        text: |
+          🚀 Production deployment completed!
+          Commit: ${{ github.sha }}
+          Version: ${{ github.ref_name }}
+          Deployed by: ${{ github.actor }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    
+    - name: Create GitHub release
+      if: success()
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.run_number }}
+        release_name: Release v${{ github.run_number }}
+        body: |
+          ## Changes in this Release
+          
+          Deployed commit: ${{ github.sha }}
+          
+          ### Services Updated
+          - API Gateway
+          - Auth Service  
+          - Persona Service
+          - Chat Service
+          - All microservices
+          
+          ### Deployment Details
+          - Environment: Production
+          - Deployment method: Blue-Green
+          - Deployed at: ${{ github.event.head_commit.timestamp }}
+        draft: false
+        prerelease: false
+
+  # Rollback capability
+  rollback-production:
+    runs-on: ubuntu-latest
+    if: failure()
+    environment: production
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Configure kubectl
+      run: |
+        aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME_PROD }}
+    
+    - name: Rollback to previous version
+      run: |
+        # Get previous successful deployment
+        PREVIOUS_REVISION=$(kubectl rollout history deployment/api-gateway -n bwenge-production | tail -2 | head -1 | awk '{print $1}')
+        
+        # Rollback all services
+        kubectl rollout undo deployment/api-gateway -n bwenge-production --to-revision=$PREVIOUS_REVISION
+        kubectl rollout undo deployment/auth-service -n bwenge-production --to-revision=$PREVIOUS_REVISION
+        kubectl rollout undo deployment/persona-service -n bwenge-production --to-revision=$PREVIOUS_REVISION
+        
+        # Wait for rollback to complete
+        kubectl rollout status deployment/api-gateway -n bwenge-production
+        kubectl rollout status deployment/auth-service -n bwenge-production
+        kubectl rollout status deployment/persona-service -n bwenge-production
+    
+    - name: Verify rollback
+      run: |
+        PROD_URL=$(kubectl get service api-gateway -n bwenge-production -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        curl -f "http://${PROD_URL}/health" || exit 1
+    
+    - name: Notify rollback
+      uses: 8398a7/action-slack@v3
+      with:
+        status: 'warning'
+        channel: '#deployments'
+        text: |
+          ⚠️ Production rollback completed!
+          Failed deployment: ${{ github.sha }}
+          Rolled back to previous version
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Database migrations
+  migrate-database:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    environment: ${{ github.event.workflow_run.head_branch == 'main' && 'production' || 'staging' }}
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install alembic psycopg2-binary
+    
+    - name: Run database migrations
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      run: |
+        # Run Alembic migrations
+        alembic upgrade head
+        
+        # Verify migration success
+        python scripts/verify-migration.py
+    
+    - name: Backup database (production only)
+      if: github.event.workflow_run.head_branch == 'main'
+      run: |
+        # Create database backup before migration
+        pg_dump ${{ secrets.DATABASE_URL }} > backup-$(date +%Y%m%d-%H%M%S).sql
+        
+        # Upload backup to S3
+        aws s3 cp backup-*.sql s3://${{ secrets.BACKUP_BUCKET }}/database-backups/

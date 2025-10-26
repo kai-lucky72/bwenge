@@ -1,0 +1,85 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Bwenge OS Services
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['auth-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'ingest-service'
+    static_configs:
+      - targets: ['ingest-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'persona-service'
+    static_configs:
+      - targets: ['persona-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'chat-service'
+    static_configs:
+      - targets: ['chat-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: '3d-service'
+    static_configs:
+      - targets: ['3d-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'analytics-service'
+    static_configs:
+      - targets: ['analytics-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'payments-service'
+    static_configs:
+      - targets: ['payments-service:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Infrastructure
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+    scrape_interval: 60s
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 60s
+
+  # Jaeger metrics
+  - job_name: 'jaeger'
+    static_configs:
+      - targets: ['jaeger-all-in-one:14269']
+    scrape_interval: 30s
+
+  # OpenTelemetry Collector
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']
+    scrape_interval: 30s

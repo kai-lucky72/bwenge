@@ -30,17 +30,40 @@ clean: ## Clean up Docker resources
 	docker-compose down -v
 	docker system prune -f
 
-test: ## Run tests
-	@echo "Running tests..."
-	# Add test commands here
+test: ## Run all tests
+	@echo "Running unit tests..."
+	python -m pytest tests/unit/ -v
+	@echo "Running integration tests..."
+	python -m pytest tests/integration/ -v
+
+test-unit: ## Run unit tests only
+	python -m pytest tests/unit/ -v --cov=services --cov=libs
+
+test-integration: ## Run integration tests only
+	python -m pytest tests/integration/ -v
+
+test-e2e: ## Run end-to-end tests
+	python -m pytest tests/integration/test_end_to_end.py -v
+
+test-performance: ## Run performance tests
+	k6 run tests/performance/load-test.js
 
 lint: ## Run linting
 	@echo "Running linting..."
-	# Add linting commands here
+	black --check .
+	isort --check-only .
+	flake8 .
+	mypy services/ libs/ --ignore-missing-imports
 
 format: ## Format code
 	@echo "Formatting code..."
-	# Add formatting commands here
+	black .
+	isort .
+
+security-scan: ## Run security scans
+	@echo "Running security scans..."
+	bandit -r services/ libs/
+	safety check
 
 dev-setup: ## Set up development environment
 	cp .env.example .env
@@ -68,13 +91,33 @@ health: ## Check service health
 	@curl -s http://localhost:8007/health || echo "Payments Service: DOWN"
 
 install-deps: ## Install development dependencies
-	pip install -r requirements-dev.txt
+	pip install -r requirements.txt
+	pip install pytest pytest-asyncio testcontainers black isort flake8 mypy
 
+docs: ## Generate API documentation
+	@echo "Generating API documentation..."
+	python -c "from docs.api_documentation import generate_api_documentation; print(generate_api_documentation())" > docs/API.md
+
+tracing-up: ## Start Jaeger tracing infrastructure
+	docker-compose -f deploy/jaeger/docker-compose.jaeger.yml up -d
+
+tracing-down: ## Stop Jaeger tracing infrastructure
+	docker-compose -f deploy/jaeger/docker-compose.jaeger.yml down
+
+smoke-test: ## Run smoke tests against deployment
+	python scripts/smoke-tests.py --url http://localhost:8000
+
+smoke-test-comprehensive: ## Run comprehensive smoke tests
+	python scripts/smoke-tests.py --url http://localhost:8000 --comprehensive
 
 backup: ## Backup database
 	docker-compose exec postgres pg_dump -U bwenge bwenge > backup_$(shell date +%Y%m%d_%H%M%S).sql
 
-
 restore: ## Restore database from backup (usage: make restore BACKUP=backup_file.sql)
 	docker-compose exec -T postgres psql -U bwenge -d bwenge < $(BACKUP)
 
+ci-setup: ## Setup CI environment
+	@echo "Setting up CI environment..."
+	cp .env.example .env.ci
+	echo "OPENAI_API_KEY=test-key" >> .env.ci
+	echo "JWT_SECRET=test-jwt-secret-for-ci" >> .env.ci
