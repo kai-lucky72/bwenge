@@ -232,6 +232,49 @@ async def delete_persona(
     
     return {"message": "Persona deleted successfully"}
 
+@app.post("/personas/{persona_id}/settings")
+async def update_persona_settings(
+    persona_id: str,
+    settings_data: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update persona settings"""
+    
+    persona = db.query(Persona).filter(
+        Persona.persona_id == persona_id,
+        Persona.org_id == current_user["org_id"]
+    ).first()
+    
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    
+    # Update settings (tone, rules, safety_rules, etc.)
+    if "tone" in settings_data:
+        persona.tone = settings_data["tone"]
+    if "rules" in settings_data:
+        persona.rules = settings_data["rules"]
+    if "safety_rules" in settings_data:
+        persona.safety_rules = settings_data["safety_rules"]
+    if "sample_prompts" in settings_data:
+        persona.sample_prompts = settings_data["sample_prompts"]
+    
+    db.commit()
+    db.refresh(persona)
+    
+    return PersonaResponse(
+        persona_id=persona.persona_id,
+        org_id=persona.org_id,
+        name=persona.name,
+        description=persona.description,
+        tone=persona.tone,
+        rules=persona.rules,
+        sample_prompts=persona.sample_prompts,
+        safety_rules=persona.safety_rules,
+        is_active=persona.is_active,
+        created_at=persona.created_at
+    )
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

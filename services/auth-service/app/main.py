@@ -272,6 +272,35 @@ async def invite_user(
             detail="Email already registered"
         )
 
+@app.get("/orgs/{org_id}/members")
+async def list_org_members(
+    org_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List organization members"""
+    # Check if user belongs to organization
+    if current_user.get("org_id") != org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    # Get all users in organization
+    users = db.query(User).filter(User.org_id == org_id).all()
+    
+    return [
+        {
+            "user_id": str(user.user_id),
+            "name": user.name,
+            "email": user.email,
+            "role": user.role,
+            "is_active": user.is_active,
+            "created_at": user.created_at.isoformat()
+        }
+        for user in users
+    ]
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

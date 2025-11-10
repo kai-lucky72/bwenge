@@ -16,8 +16,8 @@ from libs.common.schemas import SubscriptionCreate, SubscriptionResponse
 from libs.common.auth import get_current_user
 
 app = FastAPI(
-    title="Bwenge OS Payments Service (Rwanda Edition)",
-    description="Local payment simulation and subscription management service for Rwanda",
+    title="Bwenge OS Payments Service",
+    description="Database-based payment and subscription management service for local development",
     version="1.0.0"
 )
 

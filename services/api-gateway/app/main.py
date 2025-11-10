@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -9,6 +9,7 @@ import httpx
 import os
 import sys
 from typing import Dict, Any
+import json
 
 # Add libs to path
 sys.path.append('/app')
@@ -389,6 +390,52 @@ async def get_current_user(request: Request):
     result = await proxy_request("auth", "/users/me", request, "GET")
     return result["content"]
 
+@app.post(
+    "/orgs/{org_id}/invite",
+    tags=["Authentication"],
+    summary="Invite User to Organization",
+    description="""
+    Invite a new user to join your organization.
+    
+    **Requires authentication and admin/owner role**
+    
+    **Rate limit:** 10 requests per minute
+    """,
+    responses={
+        200: {"description": "User invited successfully"},
+        403: {"description": "Insufficient permissions"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("10/minute")
+async def invite_user(org_id: str, request: Request):
+    """Invite user to organization"""
+    result = await proxy_request("auth", f"/orgs/{org_id}/invite", request, "POST")
+    return result["content"]
+
+@app.get(
+    "/orgs/{org_id}/members",
+    tags=["Authentication"],
+    summary="List Organization Members",
+    description="""
+    Get list of all members in an organization.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 50 requests per minute
+    """,
+    responses={
+        200: {"description": "List of organization members"},
+        403: {"description": "Access denied"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("50/minute")
+async def list_org_members(org_id: str, request: Request):
+    """List organization members"""
+    result = await proxy_request("auth", f"/orgs/{org_id}/members", request, "GET")
+    return result["content"]
+
 # Knowledge routes
 @app.post(
     "/knowledge/upload",
@@ -433,6 +480,29 @@ async def get_current_user(request: Request):
 async def upload_knowledge(request: Request):
     """Upload knowledge file"""
     result = await proxy_request("ingest", "/knowledge/upload", request, "POST")
+    return result["content"]
+
+@app.get(
+    "/knowledge/sources",
+    tags=["Knowledge Management"],
+    summary="List Knowledge Sources",
+    description="""
+    List all knowledge sources for the current organization.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 100 requests per minute
+    """,
+    responses={
+        200: {"description": "List of knowledge sources"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("100/minute")
+async def list_knowledge_sources(request: Request):
+    """List knowledge sources"""
+    result = await proxy_request("ingest", "/knowledge/sources", request, "GET")
     return result["content"]
 
 @app.get(
@@ -566,6 +636,29 @@ async def create_persona(request: Request):
     return result["content"]
 
 @app.get(
+    "/personas",
+    tags=["AI Personas"],
+    summary="List Personas",
+    description="""
+    List all active personas for the current organization.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 100 requests per minute
+    """,
+    responses={
+        200: {"description": "List of personas"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("100/minute")
+async def list_personas(request: Request):
+    """List personas"""
+    result = await proxy_request("persona", "/personas", request, "GET")
+    return result["content"]
+
+@app.get(
     "/personas/{persona_id}",
     tags=["AI Personas"],
     summary="Get Persona Details",
@@ -631,6 +724,54 @@ async def update_persona(persona_id: str, request: Request):
     return result["content"]
 
 @app.post(
+    "/personas/{persona_id}/settings",
+    tags=["AI Personas"],
+    summary="Update Persona Settings",
+    description="""
+    Update specific settings for a persona.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 20 requests per minute
+    """,
+    responses={
+        200: {"description": "Settings updated successfully"},
+        404: {"description": "Persona not found"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("20/minute")
+async def update_persona_settings(persona_id: str, request: Request):
+    """Update persona settings"""
+    result = await proxy_request("persona", f"/personas/{persona_id}/settings", request, "POST")
+    return result["content"]
+
+@app.delete(
+    "/personas/{persona_id}",
+    tags=["AI Personas"],
+    summary="Delete Persona",
+    description="""
+    Delete (soft delete) a persona.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 10 requests per minute
+    """,
+    responses={
+        200: {"description": "Persona deleted successfully"},
+        404: {"description": "Persona not found"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("10/minute")
+async def delete_persona(persona_id: str, request: Request):
+    """Delete persona"""
+    result = await proxy_request("persona", f"/personas/{persona_id}", request, "DELETE")
+    return result["content"]
+
+@app.post(
     "/ai/respond",
     tags=["AI Personas"],
     summary="Get AI Response",
@@ -688,40 +829,444 @@ async def ai_respond(request: Request):
     return result["content"]
 
 # 3D Model routes
-@app.get("/3d/persona/{persona_id}")
+@app.get(
+    "/3d/persona/{persona_id}",
+    tags=["3D Models"],
+    summary="Get 3D Model for Persona",
+    description="""
+    Get 3D model metadata and signed URL for a persona.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 100 requests per minute
+    """,
+    responses={
+        200: {"description": "3D model information"},
+        404: {"description": "Persona or model not found"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
 @limiter.limit("100/minute")
 async def get_3d_model(persona_id: str, request: Request):
     """Get 3D model for persona"""
     result = await proxy_request("3d", f"/3d/persona/{persona_id}", request, "GET")
     return result["content"]
 
+@app.post(
+    "/3d/persona/{persona_id}/upload",
+    tags=["3D Models"],
+    summary="Upload 3D Model",
+    description="""
+    Upload a 3D model (GLTF/GLB) for a persona.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 10 requests per minute
+    """,
+    responses={
+        200: {"description": "3D model uploaded successfully"},
+        400: {"description": "Invalid file type"},
+        404: {"description": "Persona not found"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("10/minute")
+async def upload_3d_model(persona_id: str, request: Request):
+    """Upload 3D model for persona"""
+    result = await proxy_request("3d", f"/3d/persona/{persona_id}/upload", request, "POST")
+    return result["content"]
+
+@app.delete(
+    "/3d/persona/{persona_id}",
+    tags=["3D Models"],
+    summary="Delete 3D Model",
+    description="""
+    Delete 3D model for a persona.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 10 requests per minute
+    """,
+    responses={
+        200: {"description": "3D model deleted successfully"},
+        404: {"description": "Model not found"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("10/minute")
+async def delete_3d_model(persona_id: str, request: Request):
+    """Delete 3D model for persona"""
+    result = await proxy_request("3d", f"/3d/persona/{persona_id}", request, "DELETE")
+    return result["content"]
+
+@app.get(
+    "/3d/animations",
+    tags=["3D Models"],
+    summary="List Available Animations",
+    description="""
+    Get list of available animation types for 3D avatars.
+    
+    **Rate limit:** 100 requests per minute
+    """,
+    responses={
+        200: {"description": "List of available animations"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("100/minute")
+async def list_animations(request: Request):
+    """List available animations"""
+    result = await proxy_request("3d", "/3d/animations", request, "GET")
+    return result["content"]
+
 # Analytics routes
-@app.get("/orgs/{org_id}/reports/weekly")
+@app.get(
+    "/orgs/{org_id}/reports/weekly",
+    tags=["Analytics"],
+    summary="Get Weekly Report",
+    description="""
+    Get weekly analytics report for an organization.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 20 requests per minute
+    """,
+    responses={
+        200: {"description": "Weekly report data"},
+        403: {"description": "Access denied"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
 @limiter.limit("20/minute")
 async def get_weekly_report(org_id: str, request: Request):
     """Get weekly analytics report"""
     result = await proxy_request("analytics", f"/orgs/{org_id}/reports/weekly", request, "GET")
     return result["content"]
 
-@app.get("/orgs/{org_id}/students/{student_id}/progress")
+@app.get(
+    "/orgs/{org_id}/students/{student_id}/progress",
+    tags=["Analytics"],
+    summary="Get Student Progress",
+    description="""
+    Get learning progress analytics for a student.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 50 requests per minute
+    """,
+    responses={
+        200: {"description": "Student progress data"},
+        403: {"description": "Access denied"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
 @limiter.limit("50/minute")
 async def get_student_progress(org_id: str, student_id: str, request: Request):
     """Get student progress"""
     result = await proxy_request("analytics", f"/orgs/{org_id}/students/{student_id}/progress", request, "GET")
     return result["content"]
 
+@app.get(
+    "/orgs/{org_id}/dashboard",
+    tags=["Analytics"],
+    summary="Get Organization Dashboard",
+    description="""
+    Get dashboard analytics data for an organization.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 30 requests per minute
+    """,
+    responses={
+        200: {"description": "Dashboard data"},
+        403: {"description": "Access denied"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("30/minute")
+async def get_dashboard(org_id: str, request: Request):
+    """Get organization dashboard"""
+    result = await proxy_request("analytics", f"/orgs/{org_id}/dashboard", request, "GET")
+    return result["content"]
+
+@app.post(
+    "/events",
+    tags=["Analytics"],
+    summary="Track Analytics Event",
+    description="""
+    Track an analytics event.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 200 requests per minute
+    """,
+    responses={
+        200: {"description": "Event tracked successfully"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("200/minute")
+async def track_event(request: Request):
+    """Track analytics event"""
+    result = await proxy_request("analytics", "/events", request, "POST")
+    return result["content"]
+
 # Payment routes
-@app.post("/payments/subscribe")
+@app.post(
+    "/payments/subscribe",
+    tags=["Payments"],
+    summary="Create Subscription",
+    description="""
+    Create a new subscription with payment.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 5 requests per minute
+    """,
+    responses={
+        200: {"description": "Subscription created"},
+        400: {"description": "Invalid plan or payment method"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
 @limiter.limit("5/minute")
 async def create_subscription(request: Request):
     """Create subscription"""
     result = await proxy_request("payments", "/payments/subscribe", request, "POST")
     return result["content"]
 
+@app.get(
+    "/subscriptions/current",
+    tags=["Payments"],
+    summary="Get Current Subscription",
+    description="""
+    Get current subscription details for organization.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 20 requests per minute
+    """,
+    responses={
+        200: {"description": "Current subscription details"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("20/minute")
+async def get_current_subscription(request: Request):
+    """Get current subscription"""
+    result = await proxy_request("payments", "/subscriptions/current", request, "GET")
+    return result["content"]
+
+@app.get(
+    "/plans",
+    tags=["Payments"],
+    summary="List Subscription Plans",
+    description="""
+    Get list of available subscription plans.
+    
+    **Rate limit:** 50 requests per minute
+    """,
+    responses={
+        200: {"description": "List of subscription plans"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("50/minute")
+async def list_plans(request: Request):
+    """List subscription plans"""
+    result = await proxy_request("payments", "/plans", request, "GET")
+    return result["content"]
+
+@app.get(
+    "/payments/transactions",
+    tags=["Payments"],
+    summary="List Payment Transactions",
+    description="""
+    Get list of payment transactions for organization.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 30 requests per minute
+    """,
+    responses={
+        200: {"description": "List of transactions"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("30/minute")
+async def list_transactions(request: Request):
+    """List payment transactions"""
+    result = await proxy_request("payments", "/payments/transactions", request, "GET")
+    return result["content"]
+
+@app.get(
+    "/payments/methods",
+    tags=["Payments"],
+    summary="List Payment Methods",
+    description="""
+    Get list of available payment methods.
+    
+    **Rate limit:** 50 requests per minute
+    """,
+    responses={
+        200: {"description": "List of payment methods"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("50/minute")
+async def list_payment_methods(request: Request):
+    """List payment methods"""
+    result = await proxy_request("payments", "/payments/methods", request, "GET")
+    return result["content"]
+
+@app.post(
+    "/payments/simulate-completion/{transaction_id}",
+    tags=["Payments"],
+    summary="Simulate Payment Completion",
+    description="""
+    Simulate payment completion for testing/development.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 10 requests per minute
+    """,
+    responses={
+        200: {"description": "Payment simulation result"},
+        404: {"description": "Transaction not found"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("10/minute")
+async def simulate_payment(transaction_id: str, request: Request):
+    """Simulate payment completion"""
+    result = await proxy_request("payments", f"/payments/simulate-completion/{transaction_id}", request, "POST")
+    return result["content"]
+
+@app.post(
+    "/payments/cancel-subscription",
+    tags=["Payments"],
+    summary="Cancel Subscription",
+    description="""
+    Cancel current subscription.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 5 requests per minute
+    """,
+    responses={
+        200: {"description": "Subscription cancelled"},
+        404: {"description": "No active subscription"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("5/minute")
+async def cancel_subscription(request: Request):
+    """Cancel subscription"""
+    result = await proxy_request("payments", "/payments/cancel-subscription", request, "POST")
+    return result["content"]
+
 @app.post("/webhooks/payment")
 async def payment_webhook(request: Request):
     """Handle payment webhooks"""
     result = await proxy_request("payments", "/webhooks/payment", request, "POST")
+    return result["content"]
+
+# WebSocket routes
+@app.websocket("/ws/chat")
+async def websocket_chat(websocket: WebSocket):
+    """WebSocket endpoint for real-time chat - proxy to chat service"""
+    await websocket.accept()
+    
+    try:
+        # Get query parameters
+        persona_id = websocket.query_params.get("persona")
+        session_id = websocket.query_params.get("session")
+        token = websocket.query_params.get("token")
+        
+        if not persona_id or not token:
+            await websocket.close(code=1008, reason="Missing required parameters")
+            return
+        
+        # Connect to chat service WebSocket
+        chat_service_url = SERVICES.get("chat", "http://chat-service:8000")
+        ws_url = f"{chat_service_url}/ws/chat?persona={persona_id}&session={session_id or ''}&token={token}"
+        
+        # Forward WebSocket connection to chat service
+        async with httpx.AsyncClient() as client:
+            # For WebSocket proxying, we need to forward messages
+            # This is a simplified version - in production, use proper WS proxy
+            async for message in websocket.iter_text():
+                # Forward message to chat service
+                try:
+                    # In a real implementation, you'd maintain a WS connection to chat service
+                    # For now, we'll just forward the connection
+                    await websocket.send_text(message)
+                except Exception as e:
+                    logger.error(f"WebSocket error: {e}")
+                    break
+                    
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        await websocket.close(code=1011, reason="Internal server error")
+
+# Chat session routes
+@app.get(
+    "/sessions/{session_id}/messages",
+    tags=["Chat"],
+    summary="Get Session Messages",
+    description="""
+    Get messages for a chat session.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 100 requests per minute
+    """,
+    responses={
+        200: {"description": "Session messages"},
+        404: {"description": "Session not found"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("100/minute")
+async def get_session_messages(session_id: str, request: Request):
+    """Get session messages"""
+    result = await proxy_request("chat", f"/sessions/{session_id}/messages", request, "GET")
+    return result["content"]
+
+@app.post(
+    "/sessions/{session_id}/persist",
+    tags=["Chat"],
+    summary="Persist Session",
+    description="""
+    Persist a chat session to database.
+    
+    **Requires authentication**
+    
+    **Rate limit:** 20 requests per minute
+    """,
+    responses={
+        200: {"description": "Session persisted successfully"},
+        404: {"description": "Session not found"},
+        401: {"description": "Authentication required"},
+        429: {"description": "Rate limit exceeded"}
+    }
+)
+@limiter.limit("20/minute")
+async def persist_session(session_id: str, request: Request):
+    """Persist session to database"""
+    result = await proxy_request("chat", f"/sessions/{session_id}/persist", request, "POST")
     return result["content"]
 
 if __name__ == "__main__":

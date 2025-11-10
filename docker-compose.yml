@@ -167,8 +167,8 @@ services:
       - "8007:8000"
     environment:
       - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - URL_SECRET=dev-url-secret-key
+      - BASE_URL=http://localhost:8005
     depends_on:
       - postgres
 
