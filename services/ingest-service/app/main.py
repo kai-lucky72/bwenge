@@ -76,6 +76,15 @@ async def upload_knowledge(
         # Save file
         async with aiofiles.open(storage_path, 'wb') as f:
             content = await file.read()
+            
+            # Validate file size
+            MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+            if len(content) > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.0f}MB"
+                )
+            
             await f.write(content)
         
         # Create knowledge source record
@@ -169,7 +178,23 @@ async def delete_knowledge(
         db.delete(knowledge_source)
         db.commit()
         
-        # TODO: Delete from vector database
+        # Delete from vector database
+        try:
+            import weaviate
+            weaviate_client = weaviate.Client(url=os.getenv("WEAVIATE_URL", "http://localhost:8080"))
+            
+            # Delete all chunks for this source
+            weaviate_client.batch.delete_objects(
+                class_name="KnowledgeChunk",
+                where={
+                    "path": ["source_id"],
+                    "operator": "Equal",
+                    "valueString": str(source_id)
+                }
+            )
+        except Exception as e:
+            # Log warning but don't fail the request
+            print(f"Warning: Failed to delete vectors from Weaviate: {e}")
         
         return {"message": "Knowledge source deleted successfully"}
         
@@ -209,6 +234,39 @@ async def list_knowledge_sources(
         )
         for source in sources
     ]
+
+@app.get("/workers/status")
+async def get_worker_status():
+    """Check Celery worker status"""
+    try:
+        inspect = celery_app.control.inspect()
+        stats = inspect.stats()
+        active = inspect.active()
+        
+        if not stats:
+            return {
+                "status": "no_workers",
+                "workers": [],
+                "worker_count": 0,
+                "active_tasks": 0
+            }
+        
+        active_task_count = sum(len(tasks) for tasks in (active or {}).values())
+        
+        return {
+            "status": "healthy",
+            "workers": list(stats.keys()),
+            "worker_count": len(stats),
+            "active_tasks": active_task_count,
+            "stats": stats
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "workers": [],
+            "worker_count": 0
+        }
 
 if __name__ == "__main__":
     import uvicorn

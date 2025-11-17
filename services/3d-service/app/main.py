@@ -31,6 +31,10 @@ ASSETS_DIR.mkdir(exist_ok=True)
 
 # Secret for signed URLs
 URL_SECRET = os.getenv("URL_SECRET", "your-url-signing-secret")
+if URL_SECRET == "your-url-signing-secret":
+    import secrets
+    URL_SECRET = secrets.token_urlsafe(32)
+    print(f"WARNING: URL_SECRET not set, using generated secret: {URL_SECRET}")
 
 # Initialize database on startup
 @app.on_event("startup")

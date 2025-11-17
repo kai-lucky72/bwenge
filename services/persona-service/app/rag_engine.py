@@ -11,7 +11,12 @@ class RAGEngine:
     
     def __init__(self):
         self.weaviate_client = weaviate.Client(url=os.getenv("WEAVIATE_URL", "http://localhost:8080"))
-        self.openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is required")
+        
+        self.openai_client = openai.OpenAI(api_key=api_key)
     
     def retrieve_context(
         self,
