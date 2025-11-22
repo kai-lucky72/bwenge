@@ -102,9 +102,6 @@ async def get_3d_model(
 
 
 
-
-    
-
 @app.post("/3d/persona/{persona_id}/upload")
 async def upload_3d_model(
     persona_id: str,
