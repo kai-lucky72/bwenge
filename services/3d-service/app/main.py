@@ -28,6 +28,7 @@ app = FastAPI(
 ASSETS_DIR = Path("/app/assets")
 ASSETS_DIR.mkdir(exist_ok=True)
 
+
 # Secret for signed URLs
 URL_SECRET = os.getenv("URL_SECRET", "your-url-signing-secret")
 if URL_SECRET == "your-url-signing-secret":
