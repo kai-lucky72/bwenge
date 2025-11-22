@@ -36,15 +36,24 @@ if URL_SECRET == "your-url-signing-secret":
     URL_SECRET = secrets.token_urlsafe(32)
     print(f"WARNING: URL_SECRET not set, using generated secret: {URL_SECRET}")
 
+
+
+
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
     init_db()
 
+
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "3d-service"}
+
+
+
 
 @app.get("/3d/persona/{persona_id}", response_model=Model3DResponse)
 async def get_3d_model(
@@ -90,6 +99,11 @@ async def get_3d_model(
         version=model_3d.version,
         mime_type=model_3d.mime_type
     )
+
+
+
+
+    
 
 @app.post("/3d/persona/{persona_id}/upload")
 async def upload_3d_model(
