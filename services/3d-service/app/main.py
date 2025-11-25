@@ -77,6 +77,10 @@ async def get_3d_model(
         Model3D.persona_id == persona_id
     ).first()
     
+
+
+    
+    
     if not model_3d:
         # Return default model
         return Model3DResponse(
