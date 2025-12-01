@@ -150,29 +150,61 @@ class MockEmbeddings:
 ```python
 # services/persona-service/app/llm_orchestrator.py
 import os
-# libs/common/local_llm.py
+
+# Check if we're in local dev mode
+USE_MOCK_LLM = os.getenv("USE_MOCK_LLM", "false").lower() == "true"
+
+if USE_MOCK_LLM:
+    from libs.common.mock_llm import MockLLM
+    openai_client = MockLLM()
+else:
+    import openai
+    openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+```
+
+**Enable in .env:**
+```bash
+USE_MOCK_LLM=true
+```
+
+---
+
+#### **Option B: Local LLM with Ollama (Better Quality)**
+
+**Install Ollama:**
+```bash
+# Linux/Mac
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Windows
+# Download from https://ollama.com/download
+
+# Pull a model (one-time)
+ollama pull llama2  # 3.8GB
+# or
+ollama pull mistral  # 4.1GB
+```
+
+**Update LLM Orchestrator:**
+```python
+# services/persona-service/app/llm_orchestrator.py
+import os
 import requests
 
-class OllamaLLM:
-    """Local LLM using Ollama"""
+class LocalLLM:
+    """Local LLM via Ollama"""
     
-    def __init__(self, model="llama2"):
+    def __init__(self):
         self.base_url = "http://localhost:11434"
-        self.model = model
+        self.model = os.getenv("LOCAL_LLM_MODEL", "llama2")
     
     def chat_completion(self, messages, **kwargs):
-        """Chat completion with Ollama"""
-        # Convert messages to prompt
-        prompt = "\n".join([
-            f"{m['role']}: {m['content']}" 
-            for m in messages
-        ])
-        
+        """Call local Ollama API"""
         response = requests.post(
-            f"{self.base_url}/api/generate",
+            f"{self.base_url}/api/chat",
             json={
                 "model": self.model,
-                "prompt": prompt,
+                "messages": messages,
                 "stream": False
             }
         )
@@ -181,36 +213,33 @@ class OllamaLLM:
         return {
             "choices": [{
                 "message": {
-                    "content": result["response"],
+                    "content": result["message"]["content"],
                     "role": "assistant"
                 }
             }]
         }
+
+# Use local LLM if configured
+if os.getenv("USE_LOCAL_LLM") == "true":
+    openai_client = LocalLLM()
 ```
 
-**Pros:**
-- ✅ Free, unlimited usage
-- ✅ No API keys needed
-- ✅ Good quality responses
-- ✅ Privacy (all local)
-
-**Cons:**
-- ⚠️ Requires 8GB+ RAM
-- ⚠️ Slower than OpenAI
-- ⚠️ Needs initial download
+**Enable in .env:**
+```bash
+USE_LOCAL_LLM=true
+LOCAL_LLM_MODEL=llama2
+```
 
 ---
 
-#### **Option C: OpenAI with Free Tier**
+#### **Option C: OpenAI API (Only When Needed)**
 
-If you want real OpenAI for testing:
+For final testing before production:
 ```bash
-# Get free $5 credit (new accounts)
-# https://platform.openai.com/signup
-
-# Set in .env
-OPENAI_API_KEY=sk-...
+# .env
 USE_MOCK_LLM=false
+USE_LOCAL_LLM=false
+OPENAI_API_KEY=sk-your-key-here
 ```
 
 ---
@@ -219,71 +248,52 @@ USE_MOCK_LLM=false
 
 #### **Option A: Mock Embeddings (Fastest)**
 
-```python
-# libs/common/mock_embeddings.py
-import numpy as np
-import hashlib
-
-class MockEmbeddings:
-    """Deterministic mock embeddings for testing"""
-    
-    def create(self, text: str):
-        """Create deterministic embedding from text"""
-        # Use hash for deterministic results
-        hash_val = int(hashlib.md5(text.encode()).hexdigest(), 16)
-        np.random.seed(hash_val % (2**32))
-        
-        # Return 1536-dimensional vector
-        embedding = np.random.rand(1536).tolist()
-        
-        return {
-            "data": [{
-                "embedding": embedding
-            }]
-        }
-```
+Already shown above in `MockEmbeddings` class.
 
 ---
 
-#### **Option B: Sentence Transformers (Local, Good Quality)**
+#### **Option B: Local Sentence Transformers**
 
+**Install:**
 ```bash
-# Install
 pip install sentence-transformers
-
-# First run downloads model (~400MB)
 ```
 
+**Create Local Embeddings Service:**
 ```python
 # libs/common/local_embeddings.py
 from sentence_transformers import SentenceTransformer
+import numpy as np
 
 class LocalEmbeddings:
     """Local embeddings using sentence-transformers"""
     
     def __init__(self):
-        # Load model (cached after first run)
+        # Download model on first use (420MB)
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
     
-    def create(self, text: str):
-        """Create embedding locally"""
-        embedding = self.model.encode(text).tolist()
+    def create(self, input: str, **kwargs):
+        """Generate embeddings locally"""
+        if isinstance(input, str):
+            input = [input]
+        
+        embeddings = self.model.encode(input)
         
         return {
-            "data": [{
-                "embedding": embedding
-            }]
+            "data": [
+                {
+                    "embedding": emb.tolist(),
+                    "index": i
+                }
+                for i, emb in enumerate(embeddings)
+            ]
         }
 ```
 
-**Pros:**
-- ✅ Free, unlimited
-- ✅ Good quality
-- ✅ Fast after initial load
-
-**Cons:**
-- ⚠️ Different dimensions (384 vs 1536)
-- ⚠️ Initial model download
+**Enable in .env:**
+```bash
+USE_LOCAL_EMBEDDINGS=true
+```
 
 ---
 
@@ -293,13 +303,15 @@ class LocalEmbeddings:
 
 ```python
 # libs/common/mock_transcription.py
-class MockTranscription:
-    """Mock audio transcription"""
+class MockWhisper:
+    """Mock transcription for testing"""
     
-    def transcribe(self, audio_file):
+    def transcribe(self, audio_file, **kwargs):
         """Return mock transcription"""
         return {
-            "text": f"[Mock transcription of {audio_file}] This is sample transcribed text for testing purposes."
+            "text": "This is a mock transcription of the audio file. "
+                   "In production, this would be the actual transcribed text. "
+                   "For testing purposes, we're using this placeholder."
         }
 ```
 
@@ -307,34 +319,35 @@ class MockTranscription:
 
 #### **Option B: Local Whisper**
 
+**Install:**
 ```bash
-# Install
 pip install openai-whisper
-
-# First run downloads model
 ```
 
+**Already implemented in processors.py!**
+
+The code already uses local Whisper:
 ```python
-# Already implemented in processors.py!
+# services/ingest-service/app/processors.py
 import whisper
 
-model = whisper.load_model("base")  # ~140MB
-result = model.transcribe("audio.mp3")
-text = result["text"]
+class AudioProcessor(BaseProcessor):
+    def __init__(self):
+        super().__init__()
+        self.whisper_model = whisper.load_model("base")  # Local model
 ```
 
-**Models:**
-- `tiny` - 39MB, fastest
-- `base` - 74MB, good balance ✅ Recommended
-- `small` - 244MB, better quality
-- `medium` - 769MB, high quality
-- `large` - 1550MB, best quality
+**Models available:**
+- `tiny` - 39M params, ~1GB RAM
+- `base` - 74M params, ~1GB RAM (default)
+- `small` - 244M params, ~2GB RAM
+- `medium` - 769M params, ~5GB RAM
 
 ---
 
-### 4. Database (Local - Already Configured)
+### 4. Database (Already Local)
 
-#### **PostgreSQL via Docker** ✅ Already Setup
+**Current Setup:** ✅ Already using Docker
 
 ```yaml
 # docker-compose.dev.yml
@@ -350,16 +363,370 @@ postgres:
     - postgres_data:/var/lib/postgresql/data
 ```
 
-**No external service needed!**
+**No changes needed!**
 
 ---
 
-### 5. Vector Database (Local - Already Configured)
+### 5. Vector Database (Already Local)
 
-#### **Weaviate via Docker** ✅ Already Setup
+**Current Setup:** ✅ Already using Docker
 
 ```yaml
 # docker-compose.dev.yml
 weaviate:
   image: semitechnologies/weaviate:1.21.2
-  po
+  ports:
+    - "8080:8080"
+  environment:
+    AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+```
+
+**No changes needed!**
+
+---
+
+### 6. Redis (Already Local)
+
+**Current Setup:** ✅ Already using Docker
+
+```yaml
+# docker-compose.dev.yml
+redis:
+  image: redis:7-alpine
+  ports:
+    - "6379:6379"
+```
+
+**No changes needed!**
+
+---
+
+### 7. Object Storage (Local Filesystem)
+
+**Current Setup:** ✅ Already using local storage
+
+```python
+# services/ingest-service/app/main.py
+UPLOAD_DIR = Path("/app/uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+```
+
+**For 3D models:**
+```python
+# services/3d-service/app/main.py
+ASSETS_DIR = Path("/app/assets")
+ASSETS_DIR.mkdir(exist_ok=True)
+```
+
+**No changes needed!**
+
+---
+
+### 8. Payments (Mock/Simulation)
+
+**Current Setup:** ✅ Already implemented!
+
+```python
+# services/payments-service/app/main.py
+# Already has simulation mode for local development
+
+@app.post("/payments/simulate-completion/{transaction_id}")
+async def simulate_payment_completion(...):
+    """Simulate payment completion (for development/testing)"""
+    # ... simulation logic
+```
+
+**Test Data:**
+```python
+# Create test subscription
+curl -X POST http://localhost:8007/payments/subscribe \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "plan_name": "basic",
+    "payment_method": "momo",
+    "phone_number": "250788123456"
+  }'
+
+# Simulate payment completion
+curl -X POST http://localhost:8007/payments/simulate-completion/$TRANSACTION_ID \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"success": true}'
+```
+
+**No changes needed!**
+
+---
+
+### 9. Email (Local Options)
+
+#### **Option A: Console Output (Simplest)**
+
+```python
+# libs/common/email.py
+import os
+
+class EmailService:
+    def __init__(self):
+        self.use_console = os.getenv("EMAIL_CONSOLE_MODE", "true") == "true"
+    
+    def send_email(self, to: str, subject: str, body: str):
+        if self.use_console:
+            print(f"""
+            ==================== EMAIL ====================
+            To: {to}
+            Subject: {subject}
+            Body:
+            {body}
+            ===============================================
+            """)
+            return {"status": "sent", "mode": "console"}
+        else:
+            # Real email sending logic
+            pass
+```
+
+---
+
+#### **Option B: MailHog (Better for Testing)**
+
+**Add to docker-compose.dev.yml:**
+```yaml
+mailhog:
+  image: mailhog/mailhog:latest
+  ports:
+    - "1025:1025"  # SMTP
+    - "8025:8025"  # Web UI
+```
+
+**Configure:**
+```bash
+# .env
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_USER=
+SMTP_PASSWORD=
+```
+
+**View emails:** http://localhost:8025
+
+---
+
+### 10. Monitoring (Console Logs)
+
+**Current Setup:** ✅ Already using structured logging
+
+```python
+# libs/common/logging_config.py
+# Already configured for console output in development
+```
+
+**No changes needed!**
+
+---
+
+## 📝 COMPLETE LOCAL .env FILE
+
+```bash
+# .env.local (for development)
+
+# ============================================
+# LOCAL DEVELOPMENT CONFIGURATION
+# ============================================
+
+# AI & LLM (Choose one)
+USE_MOCK_LLM=true                    # Use mock responses (fastest)
+# USE_LOCAL_LLM=true                 # Use Ollama (better quality)
+# LOCAL_LLM_MODEL=llama2             # Ollama model
+# OPENAI_API_KEY=sk-...              # Real OpenAI (only when needed)
+
+# Embeddings (Choose one)
+USE_MOCK_EMBEDDINGS=true             # Use mock embeddings
+# USE_LOCAL_EMBEDDINGS=true          # Use sentence-transformers
+# OPENAI_API_KEY=sk-...              # Real OpenAI embeddings
+
+# Database (Local Docker)
+DATABASE_URL=postgresql://bwenge:bwenge_dev@localhost:5432/bwenge
+
+# Redis (Local Docker)
+REDIS_URL=redis://localhost:6379
+
+# Weaviate (Local Docker)
+WEAVIATE_URL=http://localhost:8080
+
+# JWT (Generated by setup script)
+JWT_SECRET=local-dev-secret-change-in-production
+
+# File Storage (Local)
+UPLOAD_DIR=./uploads
+ASSETS_DIR=./assets
+
+# Email (Console mode)
+EMAIL_CONSOLE_MODE=true
+# Or use MailHog
+# SMTP_HOST=localhost
+# SMTP_PORT=1025
+
+# Payments (Simulation mode)
+PAYMENT_SIMULATION_MODE=true
+
+# Monitoring (Console logs)
+LOG_LEVEL=DEBUG
+LOG_TO_CONSOLE=true
+
+# Feature Flags
+ENABLE_TRACING=false                 # Disable tracing in dev
+ENABLE_METRICS=true                  # Keep metrics for testing
+ENABLE_RATE_LIMITING=false           # Disable rate limiting in dev
+```
+
+---
+
+## 🚀 STARTUP SCRIPTS
+
+### Complete Local Setup Script
+
+**File:** `scripts/local-dev-setup.sh`
+
+```bash
+#!/bin/bash
+
+echo "🚀 Setting up Bwenge OS for LOCAL DEVELOPMENT"
+echo "=============================================="
+
+# Create .env.local if it doesn't exist
+if [ ! -f .env.local ]; then
+    echo "📝 Creating .env.local..."
+    cat > .env.local << 'EOF'
+# Local Development Configuration
+USE_MOCK_LLM=true
+USE_MOCK_EMBEDDINGS=true
+DATABASE_URL=postgresql://bwenge:bwenge_dev@localhost:5432/bwenge
+REDIS_URL=redis://localhost:6379
+WEAVIATE_URL=http://localhost:8080
+JWT_SECRET=local-dev-secret-$(openssl rand -hex 32)
+UPLOAD_DIR=./uploads
+ASSETS_DIR=./assets
+EMAIL_CONSOLE_MODE=true
+PAYMENT_SIMULATION_MODE=true
+LOG_LEVEL=DEBUG
+ENABLE_RATE_LIMITING=false
+EOF
+    echo "✅ Created .env.local"
+fi
+
+# Copy to .env
+cp .env.local .env
+
+# Create directories
+echo "📁 Creating directories..."
+mkdir -p uploads assets/3d logs
+
+# Start Docker services
+echo "🐳 Starting Docker services..."
+docker-compose -f docker-compose.dev.yml up -d postgres redis weaviate
+
+# Wait for services
+echo "⏳ Waiting for services to be ready..."
+sleep 10
+
+# Initialize database
+echo "🗄️  Initializing database..."
+docker-compose -f docker-compose.dev.yml exec -T postgres psql -U bwenge -d bwenge < scripts/init-db.sql
+
+# Install Python dependencies
+echo "📦 Installing Python dependencies..."
+pip install -r requirements.txt
+
+# Download local models (optional)
+read -p "📥 Download local Whisper model? (y/n) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    python -c "import whisper; whisper.load_model('base')"
+    echo "✅ Whisper model downloaded"
+fi
+
+echo ""
+echo "✅ LOCAL DEVELOPMENT SETUP COMPLETE!"
+echo ""
+echo "🎯 Next steps:"
+echo "  1. Start services: make up-dev"
+echo "  2. Run tests: python scripts/test-api.py"
+echo "  3. Access API: http://localhost:8000/docs"
+echo ""
+echo "💡 No external API keys needed!"
+echo "💡 Everything runs locally!"
+```
+
+---
+
+### Quick Start Script
+
+**File:** `scripts/dev-start.sh`
+
+```bash
+#!/bin/bash
+
+echo "🚀 Starting Bwenge OS (Local Development)"
+
+# Start infrastructure
+docker-compose -f docker-compose.dev.yml up -d postgres redis weaviate
+
+# Wait a bit
+sleep 5
+
+# Start services
+echo "Starting services..."
+
+# Start in background
+python scripts/run-service.py api-gateway &
+python scripts/run-service.py auth &
+python scripts/run-service.py ingest &
+python scripts/run-service.py persona &
+python scripts/run-service.py chat &
+python scripts/run-service.py 3d &
+python scripts/run-service.py analytics &
+python scripts/run-service.py payments &
+
+echo ""
+echo "✅ All services started!"
+echo ""
+echo "📍 Service URLs:"
+echo "  - API Gateway: http://localhost:8000"
+echo "  - API Docs: http://localhost:8000/docs"
+echo ""
+echo "🛑 To stop: ./scripts/dev-stop.sh"
+```
+
+---
+
+## 🧪 TEST DATA & FIXTURES
+
+### Create Test Data Script
+
+**File:** `scripts/create-test-data.py`
+
+```python
+#!/usr/bin/env python3
+"""Create test data for local development"""
+
+import requests
+import json
+
+BASE_URL = "http://localhost:8000"
+
+def create_test_user():
+    """Create test user"""
+    response = requests.post(f"{BASE_URL}/auth/register", json={
+        "name": "Test User",
+        "email": "test@bwenge.local",
+        "password": "test123",
+        "org_name": "Test School"
+    })
+    
+    if response.status_code == 200:
+        data = response.json()
+        print(f"✅ Created test user: test@bwenge.local")
+        print(f"   Token: {data['access_token'][:50]}...")
+        return data['access_token']
+    else:
+        prin
