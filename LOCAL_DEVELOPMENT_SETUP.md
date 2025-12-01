@@ -85,16 +85,15 @@ class MockLLM:
     
     def chat_completion(self, messages: List[Dict], **kwargs):
         """Mock chat completion"""
-        # Simulate response based on last message
         user_message = messages[-1]["content"] if messages else ""
         
-        response_text = random.choice(self.responses)
-        response_text += f" [Mock response to: {user_message[:50]}...]"
+        # Simple response based on keywords
+        response = self._generate_response(user_message)
         
         return {
             "choices": [{
                 "message": {
-                    "content": response_text,
+                    "content": response,
                     "role": "assistant"
                 }
             }],
@@ -105,51 +104,52 @@ class MockLLM:
             }
         }
     
-    def create_embedding(self, text: str):
-        """Mock embedding - returns random vector"""
-        import numpy as np
-        # Return 1536-dimensional vector (OpenAI ada-002 size)
-        return np.random.rand(1536).tolist()
+    def _generate_response(self, user_message: str) -> str:
+        """Generate contextual response"""
+        msg_lower = user_message.lower()
+        
+        if "math" in msg_lower or "calculate" in msg_lower:
+            return "Let me help you with that math problem. First, let's identify what we know..."
+        elif "explain" in msg_lower:
+            return "I'll explain this concept clearly. The key thing to understand is..."
+        elif "hello" in msg_lower or "hi" in msg_lower:
+            return "Hello! I'm Gabriel, your AI tutor. How can I help you learn today?"
+        else:
+            return random.choice(self.responses) + f" Regarding '{user_message[:50]}...'"
+
+class MockEmbeddings:
+    """Mock embeddings for local development"""
+    
+    def create(self, input: str, **kwargs):
+        """Generate fake embeddings"""
+        # Generate consistent fake embeddings based on text hash
+        import hashlib
+        text_hash = hashlib.md5(input.encode()).hexdigest()
+        
+        # Create 1536-dimensional vector (OpenAI ada-002 size)
+        embedding = []
+        for i in range(1536):
+            # Use hash to generate consistent values
+            val = int(text_hash[i % len(text_hash)], 16) / 15.0 - 0.5
+            embedding.append(val)
+        
+        return {
+            "data": [{
+                "embedding": embedding,
+                "index": 0
+            }],
+            "usage": {
+                "prompt_tokens": len(input.split()),
+                "total_tokens": len(input.split())
+            }
+        }
 ```
 
-**Usage in code:**
+**Update LLM Orchestrator:**
+
 ```python
 # services/persona-service/app/llm_orchestrator.py
 import os
-
-if os.getenv("USE_MOCK_LLM", "false").lower() == "true":
-    from libs.common.mock_llm import MockLLM
-    llm_client = MockLLM()
-else:
-    import openai
-    llm_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-```
-
-**Enable in .env:**
-```bash
-USE_MOCK_LLM=true
-```
-
----
-
-#### **Option B: Local LLM with Ollama (Better Quality)**
-
-**Install Ollama:**
-```bash
-# Linux/Mac
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Windows
-# Download from https://ollama.com/download
-
-# Pull a model (one-time)
-ollama pull llama2  # 3.8GB
-# or
-ollama pull mistral  # 4.1GB (better quality)
-```
-
-**Integration:**
-```python
 # libs/common/local_llm.py
 import requests
 
