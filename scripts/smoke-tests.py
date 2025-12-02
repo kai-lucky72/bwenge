@@ -8,6 +8,7 @@ to validate that a deployment is working correctly.
 
 import argparse
 import requests
+
 import json
 import time
 import sys

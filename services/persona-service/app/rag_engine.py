@@ -1,8 +1,12 @@
 import os
 import weaviate
-import openai
 from typing import List, Dict, Any
 import logging
+import sys
+
+# Add libs to path
+sys.path.append('/app')
+from libs.common.gemini_embeddings import GeminiEmbeddings
 
 logger = logging.getLogger(__name__)
 
@@ -12,11 +16,12 @@ class RAGEngine:
     def __init__(self):
         self.weaviate_client = weaviate.Client(url=os.getenv("WEAVIATE_URL", "http://localhost:8080"))
         
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
+        # Initialize Gemini embeddings
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI_API_KEY environment variable is required")
         
-        self.openai_client = openai.OpenAI(api_key=api_key)
+        self.embeddings_client = GeminiEmbeddings(api_key=gemini_api_key)
     
     def retrieve_context(
         self,
@@ -46,13 +51,10 @@ class RAGEngine:
             return []
     
     def _create_query_embedding(self, query: str) -> List[float]:
-        """Create embedding for search query"""
+        """Create embedding for search query using Gemini"""
         try:
-            response = self.openai_client.embeddings.create(
-                model="text-embedding-ada-002",
-                input=query
-            )
-            return response.data[0].embedding
+            # Use Gemini's query-optimized embedding
+            return self.embeddings_client.embed_query(query)
         except Exception as e:
             logger.error(f"Failed to create query embedding: {e}")
             raise

@@ -3,13 +3,17 @@ import fitz  # PyMuPDF
 import docx
 import pptx
 import whisper
-import openai
 import weaviate
 from pathlib import Path
 from typing import List, Dict, Any
 import tiktoken
 import uuid
 import logging
+import sys
+
+# Add libs to path
+sys.path.append('/app')
+from libs.common.gemini_embeddings import GeminiEmbeddings
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +21,12 @@ class BaseProcessor:
     """Base class for file processors"""
     
     def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
+        # Initialize embeddings client (Gemini)
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI_API_KEY environment variable is required")
         
-        self.openai_client = openai.OpenAI(api_key=api_key)
+        self.embeddings_client = GeminiEmbeddings(api_key=gemini_api_key)
         self.weaviate_client = weaviate.Client(url=os.getenv("WEAVIATE_URL", "http://localhost:8080"))
         self.encoding = tiktoken.get_encoding("cl100k_base")
     
@@ -45,13 +50,11 @@ class BaseProcessor:
         return chunks
     
     def create_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Create embeddings for text chunks"""
+        """Create embeddings for text chunks using Gemini"""
         try:
-            response = self.openai_client.embeddings.create(
-                model="text-embedding-ada-002",
-                input=texts
-            )
-            return [embedding.embedding for embedding in response.data]
+            # Use Gemini embeddings
+            response = self.embeddings_client.create(input=texts)
+            return [item["embedding"] for item in response["data"]]
         except Exception as e:
             logger.error(f"Failed to create embeddings: {e}")
             raise
