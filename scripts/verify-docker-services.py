@@ -9,17 +9,26 @@ import sys
 import subprocess
 import json
 
+
+
 def check_docker_compose():
     """Check if docker-compose is running"""
+
     try:
         result = subprocess.run(['docker-compose', 'ps', '--format', 'json'], 
+
                               capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
+
             containers = []
             for line in result.stdout.strip().split('\n'):
+
                 if line:
+
                     try:
+
                         container = json.loads(line)
+
                         containers.append(container)
                     except json.JSONDecodeError:
                         pass
