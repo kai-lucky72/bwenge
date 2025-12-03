@@ -34,6 +34,10 @@ def check_docker_compose():
                         pass
             return containers
         return []
+
+
+
+        
     except Exception as e:
         print(f"Error checking docker-compose: {e}")
         return []
