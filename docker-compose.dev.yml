@@ -82,6 +82,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - WEAVIATE_URL=http://weaviate:8080
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     depends_on:
       - postgres
       - redis
@@ -102,6 +103,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - WEAVIATE_URL=http://weaviate:8080
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     depends_on:
       - postgres
       - redis
@@ -122,6 +124,7 @@ services:
       - DATABASE_URL=postgresql://bwenge:bwenge_dev@postgres:5432/bwenge
       - WEAVIATE_URL=http://weaviate:8080
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     depends_on:
       - postgres
       - weaviate
