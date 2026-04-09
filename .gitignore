@@ -22,7 +22,6 @@ wheels/
 MANIFEST
 
 # Virtual environments
-.env
 .venv
 env/
 venv/
@@ -31,7 +30,6 @@ env.bak/
 venv.bak/
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -63,8 +61,6 @@ assets/
 !assets/.gitkeep
 
 # Secrets and config
-.env.local
-.env.production
 secrets/
 *.pem
 *.key
@@ -98,3 +94,4 @@ tmp/
 temp/
 .tmp/
 
+config.bat
