@@ -10,7 +10,7 @@ psycopg2-binary==2.9.9
 celery[redis]==5.3.4
 
 # File Processing (lightweight)
-python-multipart==0.0.6
+python-multipart==0.0.31
 aiofiles==23.2.1
 PyMuPDF==1.23.8
 python-docx==1.1.0
